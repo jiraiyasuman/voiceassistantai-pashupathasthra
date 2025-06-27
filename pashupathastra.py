@@ -1,6 +1,8 @@
 import json
 import smtplib
 import subprocess
+import sys
+
 import docx2txt
 from dotenv import load_dotenv
 from http.client import responses
@@ -55,13 +57,19 @@ import uuid
 import smtplib
 from datetime import datetime
 from wikipedia import summary
-app = Flask(__name__)
-UPLOAD_FOLDER = 'uploads'
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+from PyQt5 import QtWidgets,QtCore,QtGui
+from PyQt5.QtCore import QTime,QTimer,QDate,Qt
+from PyQt5.QtGui import QMovie
+from PyQt5.QtCore import *
+from PyQt5.QtWidgets import *
+from PyQt5.QtGui import *
+from PyQt5.uic import loadUiType
+from pahu_ui import Ui_MainWindow
+import multiprocessing
+import faulthandler
+faulthandler.enable()
 
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-# Allowed image extensions
-ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+
 # Labels for age, gender, and emotions
 age_labels = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
 gender_labels = ['Male', 'Female']
@@ -133,36 +141,6 @@ def listen_command():
         print(f" Could not request results; {e}")
         return None
 
-# Voice command capture
-def takeCommand():
-    r = sr.Recognizer()
-    audio = None
-    try:
-        with sr.Microphone() as source:
-            r.adjust_for_ambient_noise(source)
-            print("Listening...")
-            audio = r.listen(source, timeout=3, phrase_time_limit=5)
-    except sr.WaitTimeoutError:
-        print("Listening timed out.")
-        return None
-    except Exception as e:
-        print(f"Microphone error: {e}")
-        return None
-
-    if audio is None:
-        return None
-
-    try:
-        print("Recognizing...")
-        query = r.recognize_google(audio, language='en-in')
-        print(f"User said: {query}")
-        return query
-    except sr.UnknownValueError:
-        print("Sorry, I didn't understand.")
-        return None
-    except sr.RequestError as e:
-        print(f"Speech recognition error: {e}")
-        return None
 
 
 def listen_and_detect():
@@ -436,7 +414,35 @@ def send_email(to_email, subject, body):
     except Exception as e:
         speak("Sorry, I was unable to send the email.")
         print(e)
+def takeCommands():
+    r = sr.Recognizer()
+    audio = None
+    try:
+        with sr.Microphone() as source:
+            r.adjust_for_ambient_noise(source)
+            print("Listening...")
+            audio = r.listen(source, timeout=3, phrase_time_limit=5)
+    except sr.WaitTimeoutError:
+        print("Listening timed out.")
+        return None
+    except Exception as e:
+        print(f"Microphone error: {e}")
+        return None
 
+    if audio is None:
+        return None
+
+    try:
+        print("Recognizing...")
+        query = r.recognize_google(audio, language='en-in')
+        print(f"User said: {query}")
+        return query
+    except sr.UnknownValueError:
+        print("Sorry, I didn't understand.")
+        return None
+    except sr.RequestError as e:
+        print(f"Speech recognition error: {e}")
+        return None
 # MS word operations
 def word_open():
     recognizer = sr.Recognizer()
@@ -464,7 +470,7 @@ def word_open():
                         pyautogui.hotkey('ctrl', 's')
                         time.sleep(1)
                         speak("Please tell me the name of the file which you want to save")
-                        user_filename = takeCommand().lower()
+                        user_filename = takeCommands().lower()
                         pyautogui.write(f"{user_filename}.docx")
                         pyautogui.press("enter")
                         speak("File has been saved successfully")
@@ -569,6 +575,7 @@ def capture_facial_image():
     cap.release()
     cv2.destroyAllWindows()
 
+
 # Performs operations in notepad
 def notepad_open():
     speak("Opening Notepad for you...........")
@@ -599,7 +606,7 @@ def notepad_open():
                         pyautogui.hotkey('ctrl', 's')
                         time.sleep(1)
                         speak("Please tell me the name of the file which you want to save")
-                        user_filename = takeCommand().lower()
+                        user_filename = takeCommands().lower()
                         pyautogui.write(f"{user_filename}.txt")
                         pyautogui.press("enter")
                         speak("File has been saved successfully")
@@ -609,6 +616,10 @@ def notepad_open():
                     elif "space" in user_text_cmd:
                         speak("White space")
                         pyautogui.typewrite("  ")
+                    elif "close" in user_text_cmd or "exit notepad" in user_text_cmd:
+                        speak("Closing Notepad.")
+                        os.system("taskkill /f /im notepad.exe")
+                        break
                     else:
                         pyautogui.typewrite(user_text_cmd + "  ")
             except sr.WaitTimeoutError:
@@ -620,99 +631,129 @@ def notepad_open():
                 break
     speak("Your Task has been completed sir......")
 
+# Voice command capture
+def takeCommand():
+    r = sr.Recognizer()
+    audio = None
+    try:
+        with sr.Microphone() as source:
+            r.adjust_for_ambient_noise(source)
+            print("Listening...")
+            audio = r.listen(source, timeout=3, phrase_time_limit=5)
+    except sr.WaitTimeoutError:
+        print("Listening timed out.")
+        return None
+    except Exception as e:
+        print(f"Microphone error: {e}")
+        return None
+
+    if audio is None:
+        return None
+
+    try:
+        print("Recognizing...")
+        query = r.recognize_google(audio, language='en-in')
+        print(f"User said: {query}")
+        return query
+    except sr.UnknownValueError:
+        print("Sorry, I didn't understand.")
+        return None
+    except sr.RequestError as e:
+        print(f"Speech recognition error: {e}")
+        return None
+
 # Main program
 if __name__ == "__main__":
-        wish()
-        speak("This is your personal voice assistant AI, Pashupathasthra. How can I help you?")
-        while True:
-            query = takeCommand()
-            if query is None or query == "none":
-                print("No command recognized. Listening again...")
-                continue
-            query = query.lower()
-            # logic building for tasks
-            if "open notepad" in query:
-                notepad_open()
-            elif "open spring" in query:
-                speak("Opening Spring tool suite for you sir")
-                subprocess.Popen(["SpringToolSuite4.exe"])
-                time.sleep(1.5)
-                speak("Spring tool suite is successfully opened. Would you like to have anything else, Sir?")
-            elif "cmd" in query:
-                speak("Opening command prompt terminal for you sir")
-                os.system("start cmd")
-                time.sleep(1.5)
-                speak("Command Prompt Terminal is successfully opened. Would you like to have anything else, Sir?")
-            elif "open spotify" in query:
-                speak("Opening spotify for you sir")
-                subprocess.Popen(["Spotify.exe"])
-                time.sleep(1.5)
-                speak("Spotify is opened for you sir. Would you like to have anything else, Sir?")
-            elif "open youtube" in query:
-                speak("Youtube has been opened for you sir. What song would you like to play?")
-                time.sleep(3)
-                command = listen_command()
-                if command:
-                    play_song_on_youtube(command)
-            elif "open translator" in query:
-                asyncio.run(listen_and_translate())
-            elif "open weather" in query:
-                weather_detection()
-            elif "open ip address" in query:
-                try:
-                    hostname = socket.gethostname()
-                    ip = socket.gethostbyname(hostname)
-                    speak(f"Your Ip address is {ip}")
-                except Exception as e:
-                    print("Error", e)
-            elif "open word" in query:
-                speak("Opening MS word for you, Sir......")
-                subprocess.Popen(["WINWORD.exe"])
-
-                word_open()
-            elif "open powerpoint" in query:
-                speak("Opening Microsoft Powerpoint for you")
-                subprocess.Popen(["POWERPNT.exe"])
-                time.sleep(1.5)
-                speak("Microsoft Powerpoint has been opened for you...... Sir ")
-            elif "open excel" in query:
-                speak("Opening Microsoft Excel for you")
-                subprocess.Popen(["EXCEL.exe"])
-                speak("Microsoft Excel has been opened for you sir")
-            elif "open wikipedia" in query:
-                topic = listen_wikipedia_command()
-                if topic:
-                    result = search_wikipedia_info(topic)
-                    speak(f"According to wikipedia, {result}")
-                speak("Hope I have told you everything you have asked for Sir")
-            elif "open facebook" in query:
-                login_facebook()
-            elif "open instagram" in query:
-                speak("Opening your instagram profile for you Sir")
-                webbrowser.open("https://www.instagram.com/suman.talukdar53/")
-                speak("I have opened your instagram profile for you Sir")
-            elif "open linkedin" in query:
-                speak("Opening your Linkedin profile for you Sir")
-                webbrowser.open("https://www.linkedin.com/in/suman-talukdar-29b3352b6")
-                speak("I have opened your linkedin profile for you, Sir")
-            elif "open github" in query:
-                speak("Opening your Github profile for you")
-                webbrowser.open("https://github.com/jiraiyasuman")
-                speak("I have opened the github profile for you")
-            elif "open google" in query:
-                search_google()
-            elif "open library genesis" in query:
-                speak("Opening Library Genesis for you sir")
-                webbrowser.open("https://libgen.gs/")
-                speak("I have opened Library Genesis for you")
-            elif "open developer doc" in query:
-                speak("Opening Developer docs for you sir")
-                webbrowser.open("https://devdocs.io/")
-                speak("I have opened developer docs for you sir")
-            elif "open email" in query:
-                voice_email_details()
-            elif "age" in query or "gender" in query or "facial emotion" in query:
-                capture_facial_image()
-
-
-
+    wish()
+    speak("This is your personal voice assistant AI, Pashupathasthra. How can I help you?")
+    while True:
+        query = takeCommand()
+        if query is None or query == "none":
+            print("No command recognized. Listening again...")
+            continue
+        query = query.lower()
+        # logic building for tasks
+        if "open notepad" in query:
+            notepad_open()
+        elif "open spring" in query:
+            speak("Opening Spring tool suite for you sir")
+            subprocess.Popen(["SpringToolSuite4.exe"])
+            time.sleep(1.5)
+            speak("Spring tool suite is successfully opened. Would you like to have anything else, Sir?")
+        elif "cmd" in query:
+            speak("Opening command prompt terminal for you sir")
+            os.system("start cmd")
+            time.sleep(1.5)
+            speak("Command Prompt Terminal is successfully opened. Would you like to have anything else, Sir?")
+        elif "open spotify" in query:
+            speak("Opening spotify for you sir")
+            subprocess.Popen(["Spotify.exe"])
+            time.sleep(1.5)
+            speak("Spotify is opened for you sir. Would you like to have anything else, Sir?")
+        elif "open youtube" in query:
+            speak("Youtube has been opened for you sir. What song would you like to play?")
+            time.sleep(3)
+            command = listen_command()
+            if command:
+                play_song_on_youtube(command)
+        elif "open translator" in query:
+            asyncio.run(listen_and_translate())
+        elif "open weather" in query:
+            weather_detection()
+        elif "open ip address" in query:
+            try:
+                hostname = socket.gethostname()
+                ip = socket.gethostbyname(hostname)
+                speak(f"Your Ip address is {ip}")
+            except Exception as e:
+                print("Error", e)
+        elif "open word" in query:
+            speak("Opening MS word for you, Sir......")
+            subprocess.Popen(["WINWORD.exe"])
+            time.sleep(1.5)
+            word_open()
+        elif "open powerpoint" in query:
+            speak("Opening Microsoft Powerpoint for you")
+            subprocess.Popen(["POWERPNT.exe"])
+            time.sleep(1.5)
+            speak("Microsoft Powerpoint has been opened for you...... Sir ")
+        elif "open excel" in query:
+            speak("Opening Microsoft Excel for you")
+            subprocess.Popen(["EXCEL.exe"])
+            speak("Microsoft Excel has been opened for you sir")
+        elif "open wikipedia" in query:
+            topic = listen_wikipedia_command()
+            if topic:
+                result = search_wikipedia_info(topic)
+                speak(f"According to wikipedia, {result}")
+            speak("Hope I have told you everything you have asked for Sir")
+        elif "open facebook" in query:
+            login_facebook()
+        elif "open instagram" in query:
+            speak("Opening your instagram profile for you Sir")
+            webbrowser.open("https://www.instagram.com/suman.talukdar53/")
+            speak("I have opened your instagram profile for you Sir")
+        elif "open linkedin" in query:
+            speak("Opening your Linkedin profile for you Sir")
+            webbrowser.open("https://www.linkedin.com/in/suman-talukdar-29b3352b6")
+            speak("I have opened your linkedin profile for you, Sir")
+        elif "open github" in query:
+            speak("Opening your Github profile for you")
+            webbrowser.open("https://github.com/jiraiyasuman")
+            speak("I have opened the github profile for you")
+        elif "open google" in query:
+            search_google()
+        elif "open library genesis" in query:
+            speak("Opening Library Genesis for you sir")
+            webbrowser.open("https://libgen.gs/")
+            speak("I have opened Library Genesis for you")
+        elif "open developer doc" in query:
+            speak("Opening Developer docs for you sir")
+            webbrowser.open("https://devdocs.io/")
+            speak("I have opened developer docs for you sir")
+        elif "open email" in query:
+            voice_email_details()
+        elif "age" in query or "gender" in query or "facial emotion" in query:
+            capture_facial_image()
+        else:
+            continue
