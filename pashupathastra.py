@@ -10,7 +10,6 @@ from PyPDF2 import PdfReader
 import re
 import cv2
 import numpy as np
-from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
 from config import apikey
 import openai as OPENAI
@@ -64,10 +63,13 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.uic import loadUiType
-from pahu_ui import Ui_MainWindow
 import multiprocessing
 import faulthandler
 faulthandler.enable()
+import platform
+import threading
+engine = pyttsx3.init()
+lock = threading.Lock()
 
 
 # Labels for age, gender, and emotions
@@ -98,8 +100,10 @@ recognizer = sr.Recognizer()
 translator = Translator()
 # Text to speech functions
 def speak(text):
-    engine.say(text)
-    engine.runAndWait()
+    with lock:
+        engine.say(text)
+        engine.runAndWait()
+
 # Function to play the song
 def play_song_on_youtube(song_name):
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
@@ -630,7 +634,23 @@ def notepad_open():
                 print(f"Could not request results; {e}")
                 break
     speak("Your Task has been completed sir......")
-
+# Tells time
+def tell_time():
+    now = datetime.now()
+    current_time = now.strftime("%I:%M %p")
+    speak(f"The +8time is {current_time}")
+# Tells news
+def get_news():
+    news_url = "https://newsapi.org/v2/top-headlines?sources=techcrunch&apiKey=102791f5d781419786e77f38f16394ea"
+    main_page_news = requests.get(news_url).json()
+    articles = main_page_news["articles"]
+    head = []
+    day = ["first","second","third","fourth","fifth","sixth","seventh","eighth","ninth","tenth"]
+    for article in articles:
+        head.append(article["title"])
+    for i in range (len(day)):
+        speak(f"Today's {day[i]} news is: {head[i]}")
+    speak("That's the news headline for now. Hope you have heard it all")
 # Voice command capture
 def takeCommand():
     r = sr.Recognizer()
@@ -661,10 +681,32 @@ def takeCommand():
     except sr.RequestError as e:
         print(f"Speech recognition error: {e}")
         return None
-
-# Main program
-if __name__ == "__main__":
+#Shutting down system
+def system_shutdown():
+    os_type = platform.system().lower()
+    if "windows" in os_type:
+        os.system("shutdown /s /t 1")
+    elif "linux" in os_type or "darwin" in os_type:
+        os.system("shutdown now")
+# Restart now system
+def system_restart():
+    os_type = platform.system().lower()
+    if "windows" in os_type:
+        os.system("shutdown /r /t 1")
+    elif "linux" in os_type or "darwin" in os_type:
+        os.system("reboot")
+# Sleeping the system
+def system_sleep():
+    os_type = platform.system().lower()
+    if "windows" in os_type:
+        os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+    elif "linux" in os_type:
+        os.system("systemctl suspend")
+    elif "darwin" in os_type:  # macOS
+        os.system("pmset sleepnow")
+def main_voice_assistant():
     wish()
+    tell_time()
     speak("This is your personal voice assistant AI, Pashupathasthra. How can I help you?")
     while True:
         query = takeCommand()
@@ -755,5 +797,28 @@ if __name__ == "__main__":
             voice_email_details()
         elif "age" in query or "gender" in query or "facial emotion" in query:
             capture_facial_image()
+        elif "open news" in query:
+            speak("Please wait for a few minutes . Fetching and telling news for you")
+            get_news()
+        elif "switch tabs" in query:
+            speak("Switching tabs for you sir!")
+            pyautogui.keyDown("alt")
+            pyautogui.press("tab")
+            time.sleep(2)
+            pyautogui.keyUp("alt")
+            speak("Tabs have been switched for you sir")
+        elif "shutdown" in query:
+            speak("Shutting down your system")
+            system_shutdown()
+        elif "restart" in query:
+            speak("Restarting down your system")
+            system_restart()
+        elif "sleep" in query:
+            speak("Putting the system to sleep")
+            system_sleep()
         else:
             continue
+
+# Main program
+if __name__ == "__main__":
+    main_voice_assistant()
