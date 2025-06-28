@@ -2,7 +2,6 @@ import json
 import smtplib
 import subprocess
 import sys
-
 import docx2txt
 from dotenv import load_dotenv
 from http.client import responses
@@ -10,11 +9,8 @@ from PyPDF2 import PdfReader
 import re
 import cv2
 import numpy as np
-from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
 from config import apikey
-import openai as OPENAI
-from openai import OpenAI
 import pandas as panda
 from ipaddress import ip_address
 from logging.config import listen
@@ -37,7 +33,6 @@ import requests
 import geocoder
 import asyncio
 import webbrowser
-import pywhatkit
 import pyttsx3
 import speech_recognition as sr
 import pyaudio
@@ -47,7 +42,6 @@ from PIL import Image
 import torchvision.transforms as transforms
 import datetime
 import time
-import pyautogui
 from requests import get
 from googletrans import Translator
 from gtts import gTTS
@@ -64,12 +58,20 @@ from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
 from PyQt5.uic import loadUiType
-from pahu_ui import Ui_MainWindow
 import multiprocessing
 import faulthandler
+import platform
+import urllib.parse
+import threading
+if not os.environ.get('DISPLAY'):
+    print("No GUI environment detected. Skipping pyautogui-related imports.")
+else:
+    import pyautogui
+    import pywhatkit
+
 faulthandler.enable()
-
-
+engine = pyttsx3.init()
+lock = threading.Lock()
 # Labels for age, gender, and emotions
 age_labels = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
 gender_labels = ['Male', 'Female']
@@ -98,31 +100,26 @@ recognizer = sr.Recognizer()
 translator = Translator()
 # Text to speech functions
 def speak(text):
-    engine.say(text)
-    engine.runAndWait()
+    with lock:
+        engine.say(text)
+        engine.runAndWait()
 # Function to play the song
 def play_song_on_youtube(song_name):
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
-    driver.get("https://www.youtube.com")
+    # Encode the search term to a URL-friendly format
+    query = urllib.parse.quote(song_name)
 
-    # Wait for the page to load
-    time.sleep(2)
+    # Construct the search URL
+    url = f"https://www.youtube.com/results?search_query={query}"
 
-    search_box = driver.find_element(By.NAME, "search_query")
-    search_box.send_keys(song_name)
-    search_box.submit()
+    # Open YouTube search results in Chrome
+    chrome_path = "C:/Program Files/Google/Chrome/Application/chrome.exe %s"  # Adjust path if Chrome is installed elsewhere
+    webbrowser.get(chrome_path).open(url)
 
-    try:
-        # Wait and play first video
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, "video-title"))
-            )
-            first_video = driver.find_elements(By.ID, "video-title")[0]
-            first_video.click()
-
-    except Exception as e:
-            print(" Error playing video:", e)
-
+    print(f"Opened YouTube search for: {song_name}")
+    time.sleep(3)
+    pyautogui.moveTo(400, 400)  # Approx location of first video
+    pyautogui.click()
+    print("Clicked on the first video.")
 # Function to take voice input
 def listen_command():
     recognizer = sr.Recognizer()
@@ -140,9 +137,17 @@ def listen_command():
     except sr.RequestError as e:
         print(f" Could not request results; {e}")
         return None
-
-
-
+# Tells us the location of the user
+def location():
+    try:
+        res = requests.get("https://ipinfo.io")
+        data = res.json()
+        city = data.get("city", "Unknown")
+        latitude, longitude = data.get("loc", "0,0").split(",")
+        speak(f"You are currently residing in {city}. Precisely your coordinates are latitude:{latitude} and longitude:{longitude}")
+    except Exception as e:
+        print("Failed to get location:", e)
+        speak("I couldn't determine your location.")
 def listen_and_detect():
 
     with sr.Microphone() as source:
@@ -241,13 +246,12 @@ def get_weather(city):
     except Exception as e:
         print("Error fetching details ",e)
         return "Sorry, I could not fetch the details"
-
 # Get weather prediction
 def weather_detection():
     speak("Do you want to know the today's weather?")
     print("Do you want to know the today's weather?")
     command = weather_listen()
-    if command and "yes" in command:
+    if command:
         city,latitude,longitude = get_user_location()
         speak(f"Fetching weather information for {city}.")
         weather_report = get_weather(city)
@@ -302,8 +306,6 @@ def listen_google_command():
     except sr.RequestError:
         print("Cannot request result")
         return  None
-
-
 # search in google
 def search_google():
     command = listen_google_command()
@@ -327,18 +329,18 @@ EMAIL = "9875441655"
 PASSWORD = "Suman@Talukdar"
 # open facebook
 def login_facebook():
-    speak("Opening your facebook and logging into your profile now...")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
-    driver.get("https://www.facebook.com")
-    time.sleep(2)
-    email_input = driver.find_element(By.ID,"email")
-    password_input = driver.find_element(By.ID,"pass")
-    login_button = driver.find_element(By.NAME,"login")
-
-    email_input.send_keys(EMAIL)
-    password_input.send_keys(PASSWORD)
-    login_button.click()
-    speak("You are now logged into facebook")
+    speak("Opening your Facebook and logging into your profile now...")
+    # Open Facebook in Chrome
+    chrome_path = "C:/Program Files/Google/Chrome/Application/chrome.exe %s"  # Adjust path if needed
+    webbrowser.get(chrome_path).open("https://www.facebook.com")
+    # Wait for browser and page to load
+    time.sleep(7)
+    # Simulate typing login credentials using pyautogui
+    pyautogui.write(EMAIL)
+    pyautogui.press('tab')  # Move to password field
+    pyautogui.write(PASSWORD)
+    pyautogui.press('enter')  # Press login button
+    speak("You are now logged into Facebook.")
 # listen to get news
 def listen_command_news():
     recognizer = sr.Recognizer()
@@ -352,20 +354,6 @@ def listen_command_news():
             print("Sorry! I did not understand that")
         except sr.RequestError:
             print("Network error")
-# Generate AI-supported response
-def generate_repsonse(prompt,conversation_history):
-    conversation_history.append({"role": "user", "content": prompt})
-    try :
-        response = OPENAI.ChatCompletion.create(
-            model = "gpt-3.5-turbo",
-                    messages = conversation_history
-        )
-        message = response['choice'][0]['message']['content']
-        conversation_history.append({"role":"assistant","content":message})
-        return message,conversation_history
-    except Exception as e:
-        print(f"Error: {e}")
-        return ""
 # Listen to auto email commands
 def listen_email():
     r = sr.Recognizer()
@@ -489,7 +477,6 @@ def word_open():
             except sr.RequestError as e:
                 print(f"Could not request results; {e}")
                 break
-
 # captures facial image right now and analyzes face
 def capture_facial_image():
     # Start webcam
@@ -574,8 +561,6 @@ def capture_facial_image():
 
     cap.release()
     cv2.destroyAllWindows()
-
-
 # Performs operations in notepad
 def notepad_open():
     speak("Opening Notepad for you...........")
@@ -630,7 +615,23 @@ def notepad_open():
                 print(f"Could not request results; {e}")
                 break
     speak("Your Task has been completed sir......")
-
+# Tells time
+def tell_time():
+    now = datetime.now()
+    current_time = now.strftime("%I:%M %p")
+    speak(f"The +8time is {current_time}")
+# Tells news
+def get_news():
+    news_url = "https://newsapi.org/v2/top-headlines?sources=techcrunch&apiKey=102791f5d781419786e77f38f16394ea"
+    main_page_news = requests.get(news_url).json()
+    articles = main_page_news["articles"]
+    head = []
+    day = ["first","second","third","fourth","fifth","sixth","seventh","eighth","ninth","tenth"]
+    for article in articles:
+        head.append(article["title"])
+    for i in range (len(day)):
+        speak(f"Today's {day[i]} news is: {head[i]}")
+    speak("That's the news headline for now. Hope you have heard it all")
 # Voice command capture
 def takeCommand():
     r = sr.Recognizer()
@@ -661,10 +662,32 @@ def takeCommand():
     except sr.RequestError as e:
         print(f"Speech recognition error: {e}")
         return None
-
-# Main program
-if __name__ == "__main__":
+#Shutting down system
+def system_shutdown():
+    os_type = platform.system().lower()
+    if "windows" in os_type:
+        os.system("shutdown /s /t 1")
+    elif "linux" in os_type or "darwin" in os_type:
+        os.system("shutdown now")
+# Restart now system
+def system_restart():
+    os_type = platform.system().lower()
+    if "windows" in os_type:
+        os.system("shutdown /r /t 1")
+    elif "linux" in os_type or "darwin" in os_type:
+        os.system("reboot")
+# Sleeping the system
+def system_sleep():
+    os_type = platform.system().lower()
+    if "windows" in os_type:
+        os.system("rundll32.exe powrprof.dll,SetSuspendState 0,1,0")
+    elif "linux" in os_type:
+        os.system("systemctl suspend")
+    elif "darwin" in os_type:  # macOS
+        os.system("pmset sleepnow")
+def main_voice_assistant():
     wish()
+    tell_time()
     speak("This is your personal voice assistant AI, Pashupathasthra. How can I help you?")
     while True:
         query = takeCommand()
@@ -729,6 +752,8 @@ if __name__ == "__main__":
             speak("Hope I have told you everything you have asked for Sir")
         elif "open facebook" in query:
             login_facebook()
+        elif "location" in query:
+            location()
         elif "open instagram" in query:
             speak("Opening your instagram profile for you Sir")
             webbrowser.open("https://www.instagram.com/suman.talukdar53/")
@@ -755,5 +780,27 @@ if __name__ == "__main__":
             voice_email_details()
         elif "age" in query or "gender" in query or "facial emotion" in query:
             capture_facial_image()
+        elif "open news" in query:
+            speak("Please wait for a few minutes . Fetching and telling news for you")
+            get_news()
+        elif "switch tabs" in query:
+            speak("Switching tabs for you sir!")
+            pyautogui.keyDown("alt")
+            pyautogui.press("tab")
+            time.sleep(2)
+            pyautogui.keyUp("alt")
+            speak("Tabs have been switched for you sir")
+        elif "shutdown" in query:
+            speak("Shutting down your system")
+            system_shutdown()
+        elif "restart" in query:
+            speak("Restarting down your system")
+            system_restart()
+        elif "sleep" in query:
+            speak("Putting the system to sleep")
+            system_sleep()
         else:
             continue
+# Main program
+if __name__ == "__main__":
+    main_voice_assistant()
