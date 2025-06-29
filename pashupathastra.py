@@ -1,4 +1,6 @@
 import json
+import urllib.parse
+from selenium.webdriver.chrome.options import Options
 import smtplib
 import subprocess
 import sys
@@ -63,12 +65,17 @@ import faulthandler
 import platform
 import urllib.parse
 import threading
+pyautogui = None
+gender = "male"
 if not os.environ.get('DISPLAY'):
     print("No GUI environment detected. Skipping pyautogui-related imports.")
-else:
-    import pyautogui
-    import pywhatkit
-
+    try:
+        import pyautogui as pg
+        pyautogui = pg  # Reassign properly
+        import pywhatkit
+    except ImportError:
+        print("pyautogui not installed. Some features will be unavailable.")
+system = platform.system()
 faulthandler.enable()
 engine = pyttsx3.init()
 lock = threading.Lock()
@@ -91,13 +98,18 @@ load_dotenv()
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 # Initialize the TTS engine
-engine = pyttsx3.init('sapi5')
+if system == "Windows":
+    engine = pyttsx3.init('sapi5')
+else:
+    engine = pyttsx3.init()
 voices = engine.getProperty('voices')
 engine.setProperty('voice', voices[0].id)
 # Replace with the actual path to the ChromeDriver
 CHROMEDRIVER = "E:\APPS\chromedriver-win64"
 recognizer = sr.Recognizer()
 translator = Translator()
+# Define a global variable so the driver persists
+driver = None
 # Text to speech functions
 def speak(text):
     with lock:
@@ -105,21 +117,31 @@ def speak(text):
         engine.runAndWait()
 # Function to play the song
 def play_song_on_youtube(song_name):
-    # Encode the search term to a URL-friendly format
     query = urllib.parse.quote(song_name)
-
-    # Construct the search URL
     url = f"https://www.youtube.com/results?search_query={query}"
 
-    # Open YouTube search results in Chrome
-    chrome_path = "C:/Program Files/Google/Chrome/Application/chrome.exe %s"  # Adjust path if Chrome is installed elsewhere
-    webbrowser.get(chrome_path).open(url)
+    print(f"Opening browser with: {url}")
 
-    print(f"Opened YouTube search for: {song_name}")
-    time.sleep(3)
-    pyautogui.moveTo(400, 400)  # Approx location of first video
-    pyautogui.click()
-    print("Clicked on the first video.")
+    if platform.system() == "Windows":
+        # Windows Chrome path (adjust if installed elsewhere)
+        chrome_path = "C:/Program Files/Google/Chrome/Application/chrome.exe"
+        if not os.path.exists(chrome_path):
+            chrome_path = "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"
+        if os.path.exists(chrome_path):
+            webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(chrome_path))
+            webbrowser.get('chrome').open(url)
+        else:
+            print("Chrome not found. Falling back to default browser.")
+            webbrowser.open(url)
+    else:
+        # Assume Chromium installed on Linux
+        chromium_path = "/usr/bin/chromium"
+        if os.path.exists(chromium_path):
+            webbrowser.register('chromium', None, webbrowser.BackgroundBrowser(chromium_path))
+            webbrowser.get('chromium').open(url)
+        else:
+            print("Chromium not found. Falling back to default browser.")
+            webbrowser.open(url)
 # Function to take voice input
 def listen_command():
     recognizer = sr.Recognizer()
@@ -619,7 +641,7 @@ def notepad_open():
 def tell_time():
     now = datetime.now()
     current_time = now.strftime("%I:%M %p")
-    speak(f"The +8time is {current_time}")
+    speak(f"The time is {current_time}")
 # Tells news
 def get_news():
     news_url = "https://newsapi.org/v2/top-headlines?sources=techcrunch&apiKey=102791f5d781419786e77f38f16394ea"
@@ -685,6 +707,28 @@ def system_sleep():
         os.system("systemctl suspend")
     elif "darwin" in os_type:  # macOS
         os.system("pmset sleepnow")
+# Replace with your OpenRouter API key
+OPENROUTER_API_KEY = "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"
+# LLM Model to use (you can change this to another available OpenRouter model)
+MODEL = "mistralai/mistral-7b-instruct"
+# Main function of chat bot
+def main(question, history):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": MODEL,
+        "messages": history + [{"role": "user", "content": question}],
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        message = response.json()["choices"][0]["message"]["content"]
+        return message.strip()
+    else:
+        print(response.text)
+        return "Sorry, there was an error contacting the AI."
 def main_voice_assistant():
     wish()
     tell_time()
@@ -799,6 +843,47 @@ def main_voice_assistant():
         elif "sleep" in query:
             speak("Putting the system to sleep")
             system_sleep()
+        elif "chat" in query:
+            question = takeCommand().lower()
+            if "hello" in question or "hi" in question:
+                if "male" in gender:
+                    speak("Hello sir! My name is Pashupathasthra. I am your personal voice assistant AI")
+                else:
+                    speak("Hello maam! My name is Pashupathasthra. I am your personal voice assistant AI")
+            elif "how are you" in question:
+                if "male" in gender:
+                    speak("I am fine, sir")
+                else:
+                    speak("I am fine maam")
+            else:
+                history = [{"role": "system", "content": "You are a helpful AI assistant."}]
+                response = main(question, history)
+                history.append({"role": "user", "content": query})
+                history.append({"role": "assistant", "content": response})
+                speak(response)
+        elif "goodbye" in query:
+            speak("Goodbye ..... Nice interacting with you.....")
+            exit()
+        elif "live updates" in query:
+            speak("Which news site do you want me to open for you...")
+            name = takeCommand().lower()
+            if "bbc" in name:
+                speak("Opening BBC news for you")
+                webbrowser.open("https://www.bbc.com/news")
+            elif "cnn" in name:
+                speak("Opening CNN for you")
+                webbrowser.open("https://www.cnn.com/")
+            elif "new york times" in name:
+                speak("Opening new york times for you")
+                webbrowser.open("https://www.nytimes.com/")
+            elif "npr" in name:
+                speak(" Opening npr news for you")
+                webbrowser.open("https://www.npr.org/")
+            elif "al jazeera" in name:
+                speak("Opening Al jazeera news for you")
+                webbrowser.open("https://www.aljazeera.com/")
+            else:
+                speak("Sorry sir .. could not open this news site for you")
         else:
             continue
 # Main program

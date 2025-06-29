@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies for pyaudio, opencv, and other tools
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     portaudio19-dev \
@@ -8,18 +8,19 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     libglib2.0-0 \
     python3-dev \
+    espeak \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy dependencies and install
+# Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the app code
+# Copy the source code
 COPY . .
 
-# Default run command
+# Default command to run the app
 CMD ["python", "pashupathastra.py"]

@@ -24,3 +24,4 @@ gTTS
 playsound
 PyQt5
 pyparsing
+pyaudio
