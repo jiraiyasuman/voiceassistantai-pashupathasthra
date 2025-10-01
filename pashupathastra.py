@@ -1,7 +1,12 @@
 import json
 import urllib.parse
+import socket
+import sqlite3
+from csv import excel
+
 from selenium.webdriver.chrome.options import Options
 import smtplib
+from bs4 import BeautifulSoup
 import subprocess
 import sys
 import docx2txt
@@ -48,8 +53,11 @@ from requests import get
 from googletrans import Translator
 from gtts import gTTS
 import playsound
+import glob
 import os
+import yt_dlp
 import uuid
+import mysql.connector
 import smtplib
 from datetime import datetime
 from wikipedia import summary
@@ -62,6 +70,7 @@ from PyQt5.QtGui import *
 from PyQt5.uic import loadUiType
 import multiprocessing
 import faulthandler
+import PyPDF2
 import platform
 import urllib.parse
 import threading
@@ -110,20 +119,103 @@ recognizer = sr.Recognizer()
 translator = Translator()
 # Define a global variable so the driver persists
 driver = None
+# Folder where PDF files are stored
+PDF_FOLDER = "./pdfs"
 # Text to speech functions
 def speak(text):
     with lock:
         engine.say(text)
         engine.runAndWait()
 # Function to play the song
-def play_song_on_youtube(song_name):
-    query = urllib.parse.quote(song_name)
-    url = f"https://www.youtube.com/results?search_query={query}"
+def get_voice_command():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Say the song name:")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
 
-    print(f"Opening browser with: {url}")
+    try:
+        command = recognizer.recognize_google(audio)
+        print(f"🗣 You said: {command}")
+        return command
+    except sr.UnknownValueError:
+        print("Could not understand the audio.")
+    except sr.RequestError as e:
+        print(f"Could not request results; {e}")
+    return None
+def log_to_db_success(action, result, status):
+    try:
+        # Connect to MySQL Workbench
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="12345",
+            database="pashupathastra_ai"
+        )
+        cursor = conn.cursor()
+        result="Success"
+        # Insert log into the logs_success table
+        sql_query = "INSERT INTO logs_success (action, result, status, timestamp) VALUES (%s, %s, %s, %s)"
+        data = (action, result, status, datetime.now())
 
+        cursor.execute(sql_query, data)
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+        print("Database logging successful.")
+
+    except mysql.connector.Error as e:
+        print(f"MySQL database logging error: {e}")
+def log_to_db_error(action,result,status):
+    try:
+        # Connect to MySQL Workbench
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="12345",
+            database="pashupathastra_ai"
+        )
+        cursor = conn.cursor()
+        result = "ERROR"
+        # Insert log into the logs_success table
+        sql_query = "INSERT INTO logs_error (action, result, status, timestamp) VALUES (%s, %s, %s, %s)"
+        data = (action, result, status, datetime.now())
+
+        cursor.execute(sql_query, data)
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+        print("Database logging successful.")
+
+    except mysql.connector.Error as e:
+        print(f"MySQL database logging error: {e}")
+def get_youtube_url(query):
+    ydl_opts = {
+        'quiet': True,
+        'skip_download': True,
+        'extract_flat': 'in_playlist',
+        'default_search': 'ytsearch1',
+        'forcejson': True,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            result = ydl.extract_info(query, download=False)
+            video_url = result['entries'][0]['url']
+
+            # If it's already a full YouTube URL, return as is
+            if video_url.startswith("http"):
+                return video_url
+            else:
+                return f"https://www.youtube.com/watch?v={video_url}"
+        except Exception as e:
+            print(f" Failed to fetch video: {e}")
+            return None
+def open_in_chrome(url):
+    print(f"Opening: {url}")
     if platform.system() == "Windows":
-        # Windows Chrome path (adjust if installed elsewhere)
         chrome_path = "C:/Program Files/Google/Chrome/Application/chrome.exe"
         if not os.path.exists(chrome_path):
             chrome_path = "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"
@@ -131,16 +223,15 @@ def play_song_on_youtube(song_name):
             webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(chrome_path))
             webbrowser.get('chrome').open(url)
         else:
-            print("Chrome not found. Falling back to default browser.")
+            print(" Chrome not found. Using default browser.")
             webbrowser.open(url)
     else:
-        # Assume Chromium installed on Linux
-        chromium_path = "/usr/bin/chromium"
-        if os.path.exists(chromium_path):
-            webbrowser.register('chromium', None, webbrowser.BackgroundBrowser(chromium_path))
-            webbrowser.get('chromium').open(url)
+        chrome_path = "/usr/bin/google-chrome"
+        if os.path.exists(chrome_path):
+            webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(chrome_path))
+            webbrowser.get('chrome').open(url)
         else:
-            print("Chromium not found. Falling back to default browser.")
+            print("Chrome not found. Using default browser.")
             webbrowser.open(url)
 # Function to take voice input
 def listen_command():
@@ -585,10 +676,8 @@ def capture_facial_image():
     cv2.destroyAllWindows()
 # Performs operations in notepad
 def notepad_open():
-    speak("Opening Notepad for you...........")
-    subprocess.Popen(["notepad.exe"])
-    time.sleep(2.5)
 
+    time.sleep(2.5)
     speak("Please tell me what would like me to type......?")
     speak("Please listen to the following instruction very carefully....")
     speak("Please tell 'stop to stop typing'")
@@ -729,163 +818,770 @@ def main(question, history):
     else:
         print(response.text)
         return "Sorry, there was an error contacting the AI."
+def listen_for_filename():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print("Say the name of the PDF file (without '.pdf'):")
+        recognizer.adjust_for_ambient_noise(source)
+        audio = recognizer.listen(source)
+        try:
+            spoken_text = recognizer.recognize_google(audio)
+            filename = spoken_text.strip().lower().replace(" ", "_") + ".pdf"
+            print(f" You said: {filename}")
+            return filename
+        except sr.UnknownValueError:
+            print(" Could not understand the audio.")
+        except sr.RequestError as e:
+            print(f" Error with Google API: {e}")
+    return None
+def open_powerpoint():
+    system_platform = platform.system()
+
+    if system_platform == "Windows":
+        speak("Searching for Microsoft PowerPoint on your system, please wait...")
+
+        ppt_path = find_file("POWERPNT.EXE", "C:\\")  # scan entire C drive
+
+        if ppt_path:
+            subprocess.Popen([ppt_path])
+            speak("Microsoft PowerPoint has been opened for you, Sir")
+        else:
+            speak("Sorry, I could not find Microsoft PowerPoint on your system.")
+
+    elif system_platform == "Darwin":  # MacOS
+        try:
+            subprocess.Popen(["open", "-a", "Microsoft PowerPoint"])
+            speak("Microsoft PowerPoint has been opened for you, Sir")
+        except Exception:
+            speak("Sorry, Microsoft PowerPoint is not installed on your Mac.")
+
+    elif system_platform == "Linux":
+        try:
+            subprocess.Popen(["libreoffice", "--impress"])
+            speak("LibreOffice Impress has been opened for you, Sir")
+        except FileNotFoundError:
+            speak("Sorry, LibreOffice Impress is not installed on your Linux system.")
+def find_file(filename, search_path="C:\\"):
+    for root, dirs, files in os.walk(search_path):
+        if filename in files:
+            return os.path.join(root, filename)
+    return None
+def open_powerpoint():
+    system_platform = platform.system()
+
+    if system_platform == "Windows":
+        ppt_path = find_file("POWERPNT.EXE", "C:\\")
+        if ppt_path:
+            subprocess.Popen([ppt_path])
+            speak("Microsoft PowerPoint has been opened for you, Sir")
+        else:
+            speak("Sorry, Microsoft PowerPoint could not be found on your system.")
+
+    elif system_platform == "Darwin":  # MacOS
+        try:
+            subprocess.Popen(["open", "-a", "Microsoft PowerPoint"])
+            speak("Microsoft PowerPoint has been opened for you, Sir")
+        except Exception:
+            speak("Sorry, Microsoft PowerPoint is not installed on your Mac.")
+
+    elif system_platform == "Linux":
+        try:
+            subprocess.Popen(["libreoffice", "--impress"])
+            speak("LibreOffice Impress has been opened for you, Sir")
+        except FileNotFoundError:
+            speak("Sorry, LibreOffice Impress is not installed on your Linux system.")
+def extract_text_from_pdf(filepath):
+    try:
+        with open(filepath, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + "\n"
+            return text.strip()
+    except Exception as e:
+        print(f" Error reading PDF: {e}")
+        return None
+def read_aloud(text):
+    if not text:
+        print(" No text to read.")
+        return
+    engine = pyttsx3.init()
+    engine.say(text)
+    engine.runAndWait()
+def open_excel():
+    system_platform = platform.system()
+
+    if system_platform == "Windows":
+        speak("Searching for Microsoft Excel on your system, please wait...")
+
+        excel_path = find_file("EXCEL.EXE", "C:\\")  # scan entire C drive
+
+        if excel_path:
+            subprocess.Popen([excel_path])
+            speak("Microsoft Excel has been opened for you, Sir")
+        else:
+            speak("Sorry, I could not find Microsoft Excel on your system.")
+
+    elif system_platform == "Darwin":  # MacOS
+        try:
+            subprocess.Popen(["open", "-a", "Microsoft Excel"])
+            speak("Microsoft Excel has been opened for you, Sir")
+        except Exception:
+            speak("Sorry, Microsoft Excel is not installed on your Mac.")
+
+    elif system_platform == "Linux":
+        try:
+            subprocess.Popen(["libreoffice", "--calc"])
+            speak("LibreOffice Calc has been opened for you, Sir")
+        except FileNotFoundError:
+            speak("Sorry, LibreOffice Calc is not installed on your Linux system.")
+def open_word():
+    system_platform = platform.system()
+
+    if system_platform == "Windows":
+        speak("Searching for Microsoft Word on your system, please wait...")
+
+        word_path = find_file("WINWORD.EXE", "C:\\")  # scan entire C drive
+
+        if word_path:
+            subprocess.Popen([word_path])
+            speak("Microsoft Word has been opened for you, Sir")
+        else:
+            speak("Sorry, I could not find Microsoft Word on your system.")
+
+    elif system_platform == "Darwin":  # MacOS
+        try:
+            subprocess.Popen(["open", "-a", "Microsoft Word"])
+            speak("Microsoft Word has been opened for you, Sir")
+        except Exception:
+            speak("Sorry, Microsoft Word is not installed on your Mac.")
+
+    elif system_platform == "Linux":
+        try:
+            subprocess.Popen(["libreoffice", "--writer"])
+            speak("LibreOffice Writer has been opened for you, Sir")
+        except FileNotFoundError:
+            speak("Sorry, LibreOffice Writer is not installed on your Linux system.")
+def open_spotify():
+    system_platform = platform.system()
+
+    if system_platform == "Windows":
+        speak("Searching for Spotify on your system, please wait...")
+
+        # Common installation paths
+        common_paths = [
+            os.path.expanduser(r"~\AppData\Roaming\Spotify\Spotify.exe"),
+            r"C:\Program Files\Spotify\Spotify.exe",
+            r"C:\Program Files (x86)\Spotify\Spotify.exe"
+        ]
+
+        spotify_path = None
+        for path in common_paths:
+            if os.path.exists(path):
+                spotify_path = path
+                break
+
+        # If not found in common locations, scan the whole C: drive
+        if not spotify_path:
+            spotify_path = find_file("Spotify.exe", "C:\\")
+
+        if spotify_path:
+            subprocess.Popen([spotify_path])
+            speak("Spotify has been opened for you, Sir")
+        else:
+            speak("Sorry, I could not find Spotify on your system.")
+
+    elif system_platform == "Darwin":  # MacOS
+        try:
+            subprocess.Popen(["open", "-a", "Spotify"])
+            speak("Spotify has been opened for you, Sir")
+        except Exception:
+            speak("Sorry, Spotify is not installed on your Mac.")
+
+    elif system_platform == "Linux":
+        try:
+            subprocess.Popen(["spotify"])
+            speak("Spotify has been opened for you, Sir")
+        except FileNotFoundError:
+            speak("Sorry, Spotify is not installed on your Linux system.")
+def find_file_ide(filename, search_path="E:\\"):
+    """
+    Searches recursively for a file in the given directory.
+    Returns the first match found, else None.
+    """
+    for root, dirs, files in os.walk(search_path):
+        if filename in files:
+            return os.path.join(root, filename)
+    return None
+def open_sts():
+    system_platform = platform.system()
+
+    if system_platform == "Windows":
+        speak("Searching for Spring Tool Suite on your system, please wait...")
+
+        # Common installation directories
+        common_paths = [
+            r"E:\APPS\sts-4.27.0.RELEASE\SpringToolSuite4.exe"
+        ]
+
+        sts_path = None
+        for path in common_paths:
+            if os.path.exists(path):
+                sts_path = path
+                break
+
+        # Fallback: scan entire C: drive
+        if not sts_path:
+            sts_path = find_file_ide("SpringToolSuite4.exe", "E:\\")
+
+        if sts_path:
+            subprocess.Popen([sts_path])
+            speak("Spring Tool Suite has been opened for you, Sir")
+        else:
+            speak("Sorry, I could not find Spring Tool Suite on your system.")
+
+    elif system_platform == "Darwin":  # macOS
+        try:
+            subprocess.Popen(["open", "-a", "SpringToolSuite4"])
+            speak("Spring Tool Suite has been opened for you, Sir")
+        except Exception:
+            speak("Sorry, Spring Tool Suite is not installed on your Mac.")
+
+    elif system_platform == "Linux":
+        try:
+            subprocess.Popen(["sts"])  # if added to PATH
+            speak("Spring Tool Suite has been opened for you, Sir")
+        except FileNotFoundError:
+            # Try finding the launcher manually
+            sts_path = find_file("SpringToolSuite4", "/")
+            if sts_path:
+                subprocess.Popen([sts_path])
+                speak("Spring Tool Suite has been opened for you, Sir")
+            else:
+                speak("Sorry, I could not find Spring Tool Suite on your Linux system.")
+def train_model(dataset_dir="known_faces"):
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    faces, labels, names = [], [], {}
+    label_id = 0
+
+    for person_name in os.listdir(dataset_dir):
+        person_path = os.path.join(dataset_dir, person_name)
+        if not os.path.isdir(person_path):
+            continue
+
+        names[label_id] = person_name
+        for img_file in os.listdir(person_path):
+            img_path = os.path.join(person_path, img_file)
+            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                continue
+
+            # Resize training images to a consistent size
+            resized_img = cv2.resize(img, (200, 200))
+            faces.append(resized_img)
+            labels.append(label_id)
+
+        label_id += 1
+
+    if not faces:
+        raise RuntimeError("No training data found!")
+
+    recognizer.train(faces, np.array(labels))
+    return recognizer, names
+def unlock_with_face(recognizer, names):
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not open webcam.")
+        return None
+
+    face_cascade = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+    authorized = None
+    speak("Please look at the camera for face recognition.")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Error: Failed to grab frame.")
+            break
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+        for (x, y, w, h) in faces:
+            # Draw rectangle around the detected face
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+
+            face_img = gray[y:y + h, x:x + w]
+            face_resized = cv2.resize(face_img, (200, 200))
+
+            # Prediction
+            label, confidence = recognizer.predict(face_resized)
+
+            print(f"Detected face. Predicted label: {label}, Confidence: {confidence}")
+
+            # Confidence check: Lower confidence is better match
+            if confidence < 80:  # Adjust threshold as needed
+                authorized = names.get(label)
+                if authorized:
+                    speak(f"Access granted. Welcome {authorized}.")
+                    # Release resources and exit
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    return authorized
+            # Display text for a better user experience
+            if confidence < 95:
+                text = f"Authorized: {names.get(label)}"
+                color = (0, 255, 0)
+            else:
+                text = "Unauthorized"
+                color = (0, 0, 255)
+
+            cv2.putText(frame, text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+
+        cv2.imshow("Face Unlock", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    speak("Access denied.")
+    return None
 def main_voice_assistant():
     wish()
+    log_to_db_success("Wish()", f"Wish() has been executed", "SUCCESS")
     tell_time()
+    log_to_db_success("tell_time()", f"tell_time() has been executed", "SUCCESS")
     speak("This is your personal voice assistant AI, Pashupathasthra. How can I help you?")
     while True:
         query = takeCommand()
+
         if query is None or query == "none":
             print("No command recognized. Listening again...")
             continue
         query = query.lower()
+        log_to_db_success("Query", query, "SUCCESS")
         # logic building for tasks
         if "open notepad" in query:
+            speak("Opening the notepad for you, Sir. Please wait for some time")
+            system_platform = platform.system()
+
+            if system_platform == "Windows":
+                try:
+                    subprocess.Popen(["notepad.exe"])
+                    speak("Notepad has been opened for you, Sir")
+                    log_to_db_success("Open Notepad", f"Notepad has been opened and text is written and file has been saved", "SUCCESS")
+                except FileNotFoundError as e:
+                    speak("Sorry, I could not open Notepad on your system.")
+                    log_to_db_error("Open Notepad", str(e), "FAILURE")
+            elif system_platform == "Darwin":  # MacOS
+                # macOS doesn't have Notepad, so we open TextEdit instead
+                try:
+                    subprocess.Popen(["open", "-a", "TextEdit"])
+                    speak("TextEdit has been opened for you, Sir")
+                    log_to_db_success("Open Notepad",
+                                      f"Notepad has been opened and text is written and file has been saved", "SUCCESS")
+                except Exception:
+                    speak("Sorry, I could not open TextEdit on your Mac.")
+                    log_to_db_error("Open Notepad", str(e), "FAILURE")
+            elif system_platform == "Linux":
+                # Linux systems may have different editors; we try gedit first
+                try:
+                    subprocess.Popen(["gedit"])
+                    speak("Gedit has been opened for you, Sir")
+                    log_to_db_success("Open Notepad",
+                                      f"Notepad has been opened and text is written and file has been saved", "SUCCESS")
+                except FileNotFoundError:
+                    try:
+                        subprocess.Popen(["nano"])
+                        speak("Nano editor has been opened in terminal, Sir")
+                        log_to_db_success("Open Notepad",
+                                          f"Notepad has been opened and text is written and file has been saved",
+                                          "SUCCESS")
+                    except FileNotFoundError:
+                        speak("Sorry, I could not find a text editor on your Linux system.")
+                        log_to_db_error("Open Notepad", str(e), "FAILURE")
             notepad_open()
         elif "open spring" in query:
-            speak("Opening Spring tool suite for you sir")
-            subprocess.Popen(["SpringToolSuite4.exe"])
-            time.sleep(1.5)
-            speak("Spring tool suite is successfully opened. Would you like to have anything else, Sir?")
+            try:
+                speak("Opening Spring tool suite for you sir. Kindly wait for a few minutes")
+                open_sts()
+                log_to_db_success("Open Spring Tool Suite",
+                                  f"Spring Tool Suite has been opened and you can write your code",
+                                  "SUCCESS")
+                time.sleep(1.5)
+            except Exception as e:
+                speak("Could not understand what you said ")
+                log_to_db_error("Open Spring Tool Suite", str(e), "FAILURE")
         elif "cmd" in query:
-            speak("Opening command prompt terminal for you sir")
-            os.system("start cmd")
-            time.sleep(1.5)
-            speak("Command Prompt Terminal is successfully opened. Would you like to have anything else, Sir?")
+            try:
+                speak("Opening command prompt terminal for you sir")
+                os.system("start cmd")
+                time.sleep(1.5)
+                log_to_db_success("Open Command Prompt",
+                                  f"Commmand Prompt has been opened",
+                                  "SUCCESS")
+                speak("Command Prompt Terminal is successfully opened. Would you like to have anything else, Sir?")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Command Prompt", str(e), "FAILURE")
+
         elif "open spotify" in query:
-            speak("Opening spotify for you sir")
-            subprocess.Popen(["Spotify.exe"])
-            time.sleep(1.5)
-            speak("Spotify is opened for you sir. Would you like to have anything else, Sir?")
+            try:
+                speak("Opening spotify for you sir")
+                open_spotify()
+                time.sleep(1.5)
+                log_to_db_success("Open Spotify",
+                                  f"Spotify has been opened",
+                                  "SUCCESS")
+                speak("Spotify is opened for you sir. Would you like to have anything else, Sir?")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Spotify", str(e), "FAILURE")
         elif "open youtube" in query:
-            speak("Youtube has been opened for you sir. What song would you like to play?")
-            time.sleep(3)
-            command = listen_command()
-            if command:
-                play_song_on_youtube(command)
+            try:
+                speak("Youtube has been opened for you sir. What song would you like to play?")
+                song_name = get_voice_command()
+                if song_name:
+                    video_url = get_youtube_url(song_name)
+                    if video_url:
+                        open_in_chrome(video_url)
+                        log_to_db_success("Open youtube",
+                                          f"Youtube has been opened",
+                                          "SUCCESS")
+                    else:
+                        print("Could not find any video.")
+                        log_to_db_error("Open Spotify", "Could not find any video. ", "FAILURE")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Youtube", str(e), "FAILURE")
         elif "open translator" in query:
-            asyncio.run(listen_and_translate())
+            try:
+                asyncio.run(listen_and_translate())
+                log_to_db_success("Open Translator",
+                                  f"Translator has been opened",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Translator", str(e), "FAILURE")
         elif "open weather" in query:
-            weather_detection()
+            try:
+                weather_detection()
+                log_to_db_success("Open Weather Detection",
+                                  f"Weather Detection has been opened",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Translator", str(e), "FAILURE")
         elif "open ip address" in query:
             try:
                 hostname = socket.gethostname()
                 ip = socket.gethostbyname(hostname)
+                log_to_db_success("Open IP Address",
+                                  f"Hostname: {hostname}, IP: {ip}",
+                                  "SUCCESS")
                 speak(f"Your Ip address is {ip}")
             except Exception as e:
                 print("Error", e)
+                speak("Oops some error has occured")
+                log_to_db_error("Open Ip Address", str(e), "FAILURE")
         elif "open word" in query:
-            speak("Opening MS word for you, Sir......")
-            subprocess.Popen(["WINWORD.exe"])
-            time.sleep(1.5)
-            word_open()
+            try:
+                speak("Opening MS word for you, Sir......")
+                open_word()
+                time.sleep(1.5)
+                word_open()
+                log_to_db_success("Open Microsoft Word",
+                                  f"Microsoft Word is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Microsoft Word", str(e), "FAILURE")
         elif "open powerpoint" in query:
-            speak("Opening Microsoft Powerpoint for you")
-            subprocess.Popen(["POWERPNT.exe"])
-            time.sleep(1.5)
-            speak("Microsoft Powerpoint has been opened for you...... Sir ")
+            try:
+                speak("Opening Microsoft Powerpoint")
+                open_powerpoint()
+                time.sleep(1.5)
+                log_to_db_success("Open Microsoft Powerpoint",
+                                  f"Microsoft Powerpoint is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Powerpoint", str(e), "FAILURE")
         elif "open excel" in query:
-            speak("Opening Microsoft Excel for you")
-            subprocess.Popen(["EXCEL.exe"])
-            speak("Microsoft Excel has been opened for you sir")
+            try:
+                speak("Opening Microsoft Excel for you")
+                open_excel()
+                speak("Microsoft Excel has been opened for you sir")
+                log_to_db_success("Open Microsoft Excel",
+                                  f"Microsoft Excel is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Microsoft Excel", str(e), "FAILURE")
         elif "open wikipedia" in query:
-            topic = listen_wikipedia_command()
-            if topic:
-                result = search_wikipedia_info(topic)
-                speak(f"According to wikipedia, {result}")
-            speak("Hope I have told you everything you have asked for Sir")
+            try:
+                topic = listen_wikipedia_command()
+                if topic:
+                    result = search_wikipedia_info(topic)
+                    speak(f"According to wikipedia, {result}")
+                speak("Hope I have told you everything you have asked for Sir")
+                log_to_db_success("Open Wikipedia",
+                                  f"Wikipedia is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Wikipedia", str(e), "FAILURE")
         elif "open facebook" in query:
-            login_facebook()
+            try:
+                login_facebook()
+                log_to_db_success("Open Facebook",
+                                  f"Facebook is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Facebook", str(e), "FAILURE")
         elif "location" in query:
-            location()
+            try:
+                location()
+                log_to_db_success("Open Location",
+                                  f"Location is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Location", str(e), "FAILURE")
         elif "open instagram" in query:
-            speak("Opening your instagram profile for you Sir")
-            webbrowser.open("https://www.instagram.com/suman.talukdar53/")
-            speak("I have opened your instagram profile for you Sir")
+            try:
+                speak("Opening your instagram profile for you Sir")
+                webbrowser.open("https://www.instagram.com/suman.talukdar53/")
+                speak("I have opened your instagram profile for you Sir")
+                log_to_db_success("Open Instagram",
+                                  f"Instagram is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Instagram", str(e), "FAILURE")
         elif "open linkedin" in query:
-            speak("Opening your Linkedin profile for you Sir")
-            webbrowser.open("https://www.linkedin.com/in/suman-talukdar-29b3352b6")
-            speak("I have opened your linkedin profile for you, Sir")
+            try:
+                speak("Opening your Linkedin profile for you Sir")
+                webbrowser.open("https://www.linkedin.com/in/suman-talukdar-29b3352b6")
+                speak("I have opened your linkedin profile for you, Sir")
+                log_to_db_success("Open Linkedin",
+                                  f"Linkedin is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Linkedin", str(e), "FAILURE")
         elif "open github" in query:
-            speak("Opening your Github profile for you")
-            webbrowser.open("https://github.com/jiraiyasuman")
-            speak("I have opened the github profile for you")
+            try:
+                speak("Opening your Github profile for you")
+                webbrowser.open("https://github.com/jiraiyasuman")
+                speak("I have opened the github profile for you")
+                log_to_db_success("Open Github",
+                                  f"Github is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Github", str(e), "FAILURE")
         elif "open google" in query:
-            search_google()
+            try:
+                search_google()
+                log_to_db_success("Open Google",
+                              f"Google is opened for you",
+                              "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Google", str(e), "FAILURE")
         elif "open library genesis" in query:
-            speak("Opening Library Genesis for you sir")
-            webbrowser.open("https://libgen.gs/")
-            speak("I have opened Library Genesis for you")
+            try:
+                speak("Opening Library Genesis for you sir")
+                webbrowser.open("https://libgen.gs/")
+                speak("I have opened Library Genesis for you")
+                log_to_db_success("Open Library Genesis",
+                                  f"Library Genesis is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Library Genesis", str(e), "FAILURE")
         elif "open developer doc" in query:
-            speak("Opening Developer docs for you sir")
-            webbrowser.open("https://devdocs.io/")
-            speak("I have opened developer docs for you sir")
+           try:
+               speak("Opening Developer docs for you sir")
+               webbrowser.open("https://devdocs.io/")
+               speak("I have opened developer docs for you sir")
+               log_to_db_success("Open Developer Docs",
+                                 f"Developer Docs is opened for you",
+                                 "SUCCESS")
+           except Exception as e:
+               speak("Oops some error has occured")
+               log_to_db_error("Open Developer Docs", str(e), "FAILURE")
         elif "open email" in query:
-            voice_email_details()
+            try:
+                voice_email_details()
+                log_to_db_success("Open Email",
+                                   f"GMail is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Email", str(e), "FAILURE")
         elif "age" in query or "gender" in query or "facial emotion" in query:
-            capture_facial_image()
+            try:
+                capture_facial_image()
+                log_to_db_success("Open Emotion Detection",
+                                  f"Emotion Detection is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open Emotion Detection", str(e), "FAILURE")
         elif "open news" in query:
-            speak("Please wait for a few minutes . Fetching and telling news for you")
-            get_news()
+            try:
+                speak("Please wait for a few minutes . Fetching and telling news for you")
+                get_news()
+                log_to_db_success("Open News",
+                                  f"News is opened for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Open News", str(e), "FAILURE")
         elif "switch tabs" in query:
-            speak("Switching tabs for you sir!")
-            pyautogui.keyDown("alt")
-            pyautogui.press("tab")
-            time.sleep(2)
-            pyautogui.keyUp("alt")
-            speak("Tabs have been switched for you sir")
+            try:
+                speak("Switching tabs for you sir!")
+                pyautogui.keyDown("alt")
+                pyautogui.press("tab")
+                time.sleep(2)
+                pyautogui.keyUp("alt")
+                speak("Tabs have been switched for you sir")
+                log_to_db_success("Switch Tabs",
+                                  f"Tabs switch has been done for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Switch Tabs", str(e), "FAILURE")
         elif "shutdown" in query:
-            speak("Shutting down your system")
-            system_shutdown()
+            try:
+                speak("Shutting down your system")
+                log_to_db_success("System shut down",
+                                  f"System shut down has been done for you",
+                                  "SUCCESS")
+                system_shutdown()
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Shutting down", str(e), "FAILURE")
         elif "restart" in query:
-            speak("Restarting down your system")
-            system_restart()
+            try:
+                speak("Restarting down your system")
+                log_to_db_success("System restart",
+                                  f"System restart has been done for you",
+                                  "SUCCESS")
+                system_restart()
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("System restart", str(e), "FAILURE")
         elif "sleep" in query:
-            speak("Putting the system to sleep")
-            system_sleep()
+            try:
+                speak("Putting the system to sleep")
+                log_to_db_success("System sleep",
+                                  f"System sleep has been done for you",
+                                  "SUCCESS")
+                system_sleep()
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("System restart", str(e), "FAILURE")
         elif "chat" in query:
-            question = takeCommand().lower()
-            if "hello" in question or "hi" in question:
-                if "male" in gender:
-                    speak("Hello sir! My name is Pashupathasthra. I am your personal voice assistant AI")
+            try:
+                question = takeCommand().lower()
+                if "hello" in question or "hi" in question:
+                    if "male" in gender:
+                        speak("Hello sir! My name is Pashupathasthra. I am your personal voice assistant AI")
+                    else:
+                        speak("Hello maam! My name is Pashupathasthra. I am your personal voice assistant AI")
+                elif "how are you" in question:
+                    if "male" in gender:
+                        speak("I am fine, sir")
+                    else:
+                        speak("I am fine maam")
                 else:
-                    speak("Hello maam! My name is Pashupathasthra. I am your personal voice assistant AI")
-            elif "how are you" in question:
-                if "male" in gender:
-                    speak("I am fine, sir")
-                else:
-                    speak("I am fine maam")
-            else:
-                history = [{"role": "system", "content": "You are a helpful AI assistant."}]
-                response = main(question, history)
-                history.append({"role": "user", "content": query})
-                history.append({"role": "assistant", "content": response})
-                speak(response)
+                    history = [{"role": "system", "content": "You are a helpful AI assistant."}]
+                    response = main(question, history)
+                    history.append({"role": "user", "content": query})
+                    history.append({"role": "assistant", "content": response})
+                    speak(response)
+                log_to_db_success("Chat",
+                                  f"chat has been done for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Chat Bot", str(e), "FAILURE")
         elif "goodbye" in query:
-            speak("Goodbye ..... Nice interacting with you.....")
-            exit()
+            try:
+                speak("Goodbye ..... Nice interacting with you.....")
+                log_to_db_success("GoodBye",
+                                  f"Exit has been done for you",
+                                  "SUCCESS")
+                exit()
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Goodbye", str(e), "FAILURE")
+        elif "pdf reader" in query:
+            try:
+                speak("Please tell the name of the file you want to read?")
+                filename = listen_for_filename()
+                if not filename:
+                    return
+
+                filepath = os.path.join(PDF_FOLDER, filename)
+                if not os.path.exists(filepath):
+                    print(f" File not found: {filepath}")
+                    return
+
+                print(" Reading the file...")
+                text = extract_text_from_pdf(filepath)
+                read_aloud(text)
+                log_to_db_success("File Reader",
+                                  f"File Reader has been done for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("File Reader", str(e), "FAILURE")
         elif "live updates" in query:
-            speak("Which news site do you want me to open for you...")
-            name = takeCommand().lower()
-            if "bbc" in name:
-                speak("Opening BBC news for you")
-                webbrowser.open("https://www.bbc.com/news")
-            elif "cnn" in name:
-                speak("Opening CNN for you")
-                webbrowser.open("https://www.cnn.com/")
-            elif "new york times" in name:
-                speak("Opening new york times for you")
-                webbrowser.open("https://www.nytimes.com/")
-            elif "npr" in name:
-                speak(" Opening npr news for you")
-                webbrowser.open("https://www.npr.org/")
-            elif "al jazeera" in name:
-                speak("Opening Al jazeera news for you")
-                webbrowser.open("https://www.aljazeera.com/")
-            else:
-                speak("Sorry sir .. could not open this news site for you")
+            try:
+                speak("Which news site do you want me to open for you...")
+                name = takeCommand().lower()
+                if "bbc" in name:
+                    speak("Opening BBC news for you")
+                    webbrowser.open("https://www.bbc.com/news")
+                elif "cnn" in name:
+                    speak("Opening CNN for you")
+                    webbrowser.open("https://www.cnn.com/")
+                elif "new york times" in name:
+                    speak("Opening new york times for you")
+                    webbrowser.open("https://www.nytimes.com/")
+                elif "npr" in name:
+                    speak(" Opening npr news for you")
+                    webbrowser.open("https://www.npr.org/")
+                elif "al jazeera" in name:
+                    speak("Opening Al jazeera news for you")
+                    webbrowser.open("https://www.aljazeera.com/")
+                else:
+                    speak("Sorry sir .. could not open this news site for you")
+                log_to_db_success("Live Updates",
+                                  f"Live Updates has been done for you",
+                                  "SUCCESS")
+            except Exception as e:
+                speak("Oops some error has occured")
+                log_to_db_error("Live Update", str(e), "FAILURE")
         else:
             continue
 # Main program
 if __name__ == "__main__":
-    main_voice_assistant()
+      try:
+         recognizer, names = train_model("known_faces")
+         user = unlock_with_face(recognizer, names)
+         if user:
+             log_to_db_success("Face Recognition",
+                               f"Face Recognition is being executed successfully", "SUCCESS")
+             main_voice_assistant()
+      except Exception as e:
+         speak("Setup error. Please check your dataset.")
+         log_to_db_error("Face Recognition", str(e), "FAILURE")
+    #main_voice_assistant()
